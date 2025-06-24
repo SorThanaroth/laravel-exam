@@ -1,6 +1,8 @@
+version: '3.8'
+
 services:
   app:
-    image: php:8.2-fpm
+    build: .  # This will use the Dockerfile
     container_name: laravel_app
     working_dir: /var/www
     volumes:
