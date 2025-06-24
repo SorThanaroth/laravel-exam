@@ -1,0 +1,442 @@
+# kubernetes-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: laravel-app-deployment
+  labels:
+    app: laravel-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: laravel-app
+  template:
+    metadata:
+      labels:
+        app: laravel-app
+    spec:
+      containers:
+      # Web Server Container (PHP 8.2 + NGINX)
+      - name: web-server
+        image: webdevops/php-nginx:8.2-alpine
+        ports:
+        - containerPort: 8080
+          name: web
+        - containerPort: 22
+          name: ssh
+        env:
+        - name: WEB_DOCUMENT_ROOT
+          value: "/app/public"
+        - name: PHP_DISPLAY_ERRORS
+          value: "1"
+        - name: PHP_MEMORY_LIMIT
+          value: "512M"
+        - name: PHP_MAX_EXECUTION_TIME
+          value: "300"
+        - name: DB_CONNECTION
+          value: "mysql"
+        - name: DB_HOST
+          value: "127.0.0.1"
+        - name: DB_PORT
+          value: "3306"
+        - name: DB_DATABASE
+          value: "yourname-db"
+        - name: DB_USERNAME
+          value: "root"
+        - name: DB_PASSWORD
+          value: "Hello@123"
+        volumeMounts:
+        - name: app-storage
+          mountPath: /app
+        - name: nginx-config
+          mountPath: /opt/docker/etc/nginx/vhost.conf
+          subPath: nginx.conf
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+      # MySQL Database Container
+      - name: mysql-db
+        image: mysql:8.0
+        ports:
+        - containerPort: 3306
+          name: mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "Hello@123"
+        - name: MYSQL_DATABASE
+          value: "yourname-db"
+        - name: MYSQL_USER
+          value: "laravel"
+        - name: MYSQL_PASSWORD
+          value: "Hello@123"
+        volumeMounts:
+        - name: mysql-storage
+          mountPath: /var/lib/mysql
+        - name: mysql-config
+          mountPath: /etc/mysql/conf.d
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - mysqladmin
+            - ping
+            - -h
+            - localhost
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - mysql
+            - -h
+            - localhost
+            - -u
+            - root
+            - -pHello@123
+            - -e
+            - "SELECT 1"
+          initialDelaySeconds: 5
+          periodSeconds: 2
+
+      volumes:
+      - name: app-storage
+        emptyDir: {}
+      - name: mysql-storage
+        persistentVolumeClaim:
+          claimName: mysql-pvc
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+      - name: mysql-config
+        configMap:
+          name: mysql-config
+
+      initContainers:
+      - name: git-clone
+        image: alpine/git
+        command:
+        - /bin/sh
+        - -c
+        - |
+          git clone https://github.com/yourusername/your-laravel-repo.git /tmp/app
+          cp -r /tmp/app/* /app/
+          chown -R 1000:1000 /app
+        volumeMounts:
+        - name: app-storage
+          mountPath: /app
+
+---
+# Service for Web Server
+apiVersion: v1
+kind: Service
+metadata:
+  name: laravel-web-service
+  labels:
+    app: laravel-app
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30008
+    name: web
+  - port: 22
+    targetPort: 22
+    nodePort: 30022
+    name: ssh
+  selector:
+    app: laravel-app
+
+---
+# Service for MySQL
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  labels:
+    app: laravel-app
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3306
+    targetPort: 3306
+    name: mysql
+  selector:
+    app: laravel-app
+
+---
+# PersistentVolumeClaim for MySQL
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# ConfigMap for NGINX
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+data:
+  nginx.conf: |
+    server {
+        listen 8080;
+        server_name _;
+        root /app/public;
+        index index.php index.html;
+
+        location / {
+            try_files $uri $uri/ /index.php?$query_string;
+        }
+
+        location ~ \.php$ {
+            fastcgi_pass 127.0.0.1:9000;
+            fastcgi_index index.php;
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+            include fastcgi_params;
+        }
+
+        location ~ /\.ht {
+            deny all;
+        }
+
+        location = /favicon.ico {
+            access_log off;
+            log_not_found off;
+        }
+
+        location = /robots.txt {
+            access_log off;
+            log_not_found off;
+        }
+    }
+
+---
+# ConfigMap for MySQL
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+data:
+  my.cnf: |
+    [mysqld]
+    default-authentication-plugin=mysql_native_password
+    bind-address=0.0.0.0
+    max_connections=100
+    innodb_buffer_pool_size=128M
+    
+---
+# Alternative Deployment with SSH enabled web container
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: laravel-app-ssh-deployment
+  labels:
+    app: laravel-app-ssh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: laravel-app-ssh
+  template:
+    metadata:
+      labels:
+        app: laravel-app-ssh
+    spec:
+      containers:
+      # Web Server Container with SSH
+      - name: web-server-ssh
+        image: ubuntu:22.04
+        ports:
+        - containerPort: 8080
+          name: web
+        - containerPort: 22
+          name: ssh
+        env:
+        - name: DB_CONNECTION
+          value: "mysql"
+        - name: DB_HOST
+          value: "127.0.0.1"
+        - name: DB_PORT
+          value: "3306"
+        - name: DB_DATABASE
+          value: "yourname-db"
+        - name: DB_USERNAME
+          value: "root"
+        - name: DB_PASSWORD
+          value: "Hello@123"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          apt-get update && apt-get install -y \
+            php8.2 \
+            php8.2-fpm \
+            php8.2-mysql \
+            php8.2-xml \
+            php8.2-curl \
+            php8.2-mbstring \
+            php8.2-zip \
+            php8.2-gd \
+            php8.2-intl \
+            php8.2-bcmath \
+            php8.2-soap \
+            php8.2-xsl \
+            php8.2-opcache \
+            nginx \
+            openssh-server \
+            git \
+            curl \
+            unzip \
+            supervisor && \
+          mkdir -p /var/run/sshd && \
+          echo 'root:Hello@123' | chpasswd && \
+          sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+          sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+          curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer && \
+          git clone https://github.com/yourusername/your-laravel-repo.git /var/www/html && \
+          chown -R www-data:www-data /var/www/html && \
+          chmod -R 755 /var/www/html && \
+          echo 'server {
+              listen 8080;
+              server_name _;
+              root /var/www/html/public;
+              index index.php index.html;
+              location / {
+                  try_files $uri $uri/ /index.php?$query_string;
+              }
+              location ~ \.php$ {
+                  fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+                  fastcgi_index index.php;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                  include fastcgi_params;
+              }
+          }' > /etc/nginx/sites-available/default && \
+          echo '[program:nginx]
+          command=/usr/sbin/nginx -g "daemon off;"
+          autostart=true
+          autorestart=true
+          stderr_logfile=/var/log/nginx.err.log
+          stdout_logfile=/var/log/nginx.out.log
+          
+          [program:php8.2-fpm]
+          command=/usr/sbin/php-fpm8.2 -F
+          autostart=true
+          autorestart=true
+          stderr_logfile=/var/log/php-fpm.err.log
+          stdout_logfile=/var/log/php-fpm.out.log
+          
+          [program:sshd]
+          command=/usr/sbin/sshd -D
+          autostart=true
+          autorestart=true
+          stderr_logfile=/var/log/sshd.err.log
+          stdout_logfile=/var/log/sshd.out.log' > /etc/supervisor/conf.d/supervisord.conf && \
+          /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+        volumeMounts:
+        - name: app-storage
+          mountPath: /var/www/html
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+      # MySQL Database Container (same as above)
+      - name: mysql-db
+        image: mysql:8.0
+        ports:
+        - containerPort: 3306
+          name: mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "Hello@123"
+        - name: MYSQL_DATABASE
+          value: "yourname-db"
+        - name: MYSQL_USER
+          value: "laravel"
+        - name: MYSQL_PASSWORD
+          value: "Hello@123"
+        volumeMounts:
+        - name: mysql-storage
+          mountPath: /var/lib/mysql
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+
+      volumes:
+      - name: app-storage
+        emptyDir: {}
+      - name: mysql-storage
+        persistentVolumeClaim:
+          claimName: mysql-pvc-ssh
+
+---
+# PersistentVolumeClaim for MySQL (SSH version)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc-ssh
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# Service for SSH-enabled Web Server
+apiVersion: v1
+kind: Service
+metadata:
+  name: laravel-web-ssh-service
+  labels:
+    app: laravel-app-ssh
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30080
+    name: web
+  - port: 22
+    targetPort: 22
+    nodePort: 30022
+    name: ssh
+  selector:
+    app: laravel-app-ssh
